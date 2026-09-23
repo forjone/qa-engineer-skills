@@ -1,0 +1,27 @@
+{
+  "name": "test-case-design",
+  "version": "0.1.0",
+  "description": "Risk-driven test case design and MeterSphere XMind generation for Codex.",
+  "author": {
+    "name": "superfa"
+  },
+  "homepage": "https://github.com/forjone/qa-engineer-skills#readme",
+  "repository": "https://github.com/forjone/qa-engineer-skills",
+  "license": "MIT",
+  "keywords": ["testing", "test-case", "metersphere", "xmind", "quality-assurance"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Test Case Design",
+    "shortDescription": "Risk-driven test case design with MeterSphere XMind support.",
+    "longDescription": "Turn PRDs and business rules into traceable, risk-driven test cases and validate MeterSphere XMind outlines.",
+    "developerName": "superfa",
+    "category": "Productivity",
+    "capabilities": ["Write", "Analyze"],
+    "websiteURL": "https://github.com/forjone/qa-engineer-skills",
+    "defaultPrompt": [
+      "根据这份 PRD 设计风险驱动的测试用例",
+      "将测试大纲构建并校验为 MeterSphere XMind 文件"
+    ],
+    "brandColor": "#0F766E"
+  }
+}
