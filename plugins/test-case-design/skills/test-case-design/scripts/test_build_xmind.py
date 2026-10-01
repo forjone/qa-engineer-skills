@@ -18,7 +18,8 @@ class BuildTests(unittest.TestCase):
     def setUp(self):
         self.case = node('tc-p0: Reject cross-tenant request',
                          node('pc: User A belongs to tenant A'),
-                         node('步骤1：Submit request for tenant B', node('Request is rejected; no record is created')),
+                         node('1. Open the request page\n2. Submit request for tenant B',
+                              node('Request is rejected; no record is created')),
                          node('rc: CASE-001; RULE-001; PRD 3.2'),
                          node('tag: service,security,api'))
         self.root = node('Project', node('Module', self.case))
@@ -33,6 +34,14 @@ class BuildTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             builder.validate(root, strict=True)
 
+    def test_short_titles_are_unique_within_their_directory(self):
+        root = node('Project', node('List', copy.deepcopy(self.case)),
+                    node('Edit', copy.deepcopy(self.case)))
+        self.assertEqual(builder.validate(root, strict=True)[1], 2)
+        with self.assertRaisesRegex(ValueError, '名称重复'):
+            builder.validate(node('Project', node('List', self.case,
+                             copy.deepcopy(self.case))), strict=True)
+
     def test_invalid_delivery_cases(self):
         variants = []
         for prefix in ('pc:', 'rc:', 'tag:'):
@@ -44,7 +53,7 @@ class BuildTests(unittest.TestCase):
             index = 3 if title.startswith('tag') else 0
             case['children'][index]['title'] = title
             variants.append(case)
-        for title in ('步骤2：Action', '步骤1：'):
+        for title in ('2. Action', '1.', '1. First action\n3. Third action'):
             case = copy.deepcopy(self.case)
             case['children'][1]['title'] = title
             variants.append(case)
@@ -54,6 +63,12 @@ class BuildTests(unittest.TestCase):
             variants.append(case)
         case = copy.deepcopy(self.case)
         case['children'].append(node('rc: duplicate'))
+        variants.append(case)
+        case = copy.deepcopy(self.case)
+        case['children'][1]['children'].append(node('Second expected result'))
+        variants.append(case)
+        case = copy.deepcopy(self.case)
+        case['children'].append(node('1. Another action', node('Another expected result')))
         variants.append(case)
         for case in variants:
             with self.subTest(case=case), self.assertRaises(ValueError):
@@ -81,6 +96,20 @@ class BuildTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             builder.validate(node('Project', node('Too deep', root)), strict=True)
 
+    def test_rejects_overlapping_sibling_modules(self):
+        list_case = copy.deepcopy(self.case)
+        list_case['title'] = 'tc-p0: List behavior'
+        edit_case = copy.deepcopy(self.case)
+        edit_case['title'] = 'tc-p0: Edit behavior'
+        combined_case = copy.deepcopy(self.case)
+        combined_case['title'] = 'tc-p0: Shared behavior'
+        root = node('Project', node('Calendar',
+                                   node('列表', list_case),
+                                   node('编辑日历', edit_case),
+                                   node('列表与编辑', combined_case)))
+        with self.assertRaisesRegex(ValueError, '分类范围重叠'):
+            builder.validate(root, strict=True)
+
     def test_parser_and_round_trip(self):
         with tempfile.TemporaryDirectory(prefix='test-xmind-') as folder:
             source = Path(folder) / 'outline.txt'
@@ -101,7 +130,7 @@ class BuildTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='test-xmind-cli-') as folder:
             source = Path(folder) / 'outline.txt'
             source.write_text('Project\n  Module\n    tc-p0: Reject request\n'
-                              '      pc: Authenticated user\n      步骤1：Submit request\n'
+                              '      pc: Authenticated user\n      1. Open request page\\n2. Submit request\n'
                               '        Request is rejected; no record is created\n'
                               '      rc: CASE-001; RULE-001; PRD 3.2\n'
                               '      tag: service,security,api\n', encoding='utf-8')
@@ -111,6 +140,10 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(output.exists())
             self.assertIn('NOT VERIFIED:', result.stdout)
+            with zipfile.ZipFile(output) as archive:
+                topic = json.loads(archive.read('content.json'))[0]['rootTopic']
+                action = topic['children']['attached'][0]['children']['attached'][0]['children']['attached'][1]
+                self.assertEqual(action['title'], '1. Open request page\n2. Submit request')
             original = source.read_bytes()
             result = subprocess.run(command + [str(source)], capture_output=True, text=True, encoding='utf-8')
             self.assertNotEqual(result.returncode, 0)

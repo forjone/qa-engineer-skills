@@ -10,7 +10,8 @@
       pc: 前置条件（非必填，不允许有子节点）
       rc: 备注（非必填，不允许有子节点）
       tag: 标签1,标签2（非必填，半角逗号分隔，不允许有子节点）
-      其他子节点均为「步骤」，步骤的子节点为该步骤的「预期结果」
+      正式用例只有一个「操作步骤」主题，使用 1.、2.、3. 连续编号；其唯一子节点为关键预期
+      大纲中使用字面量 \n 表示同一操作步骤主题内换行，构建后写入 XMind 多行主题
   - 以 # 开头的行视为注释，不参与解析
 
 用法：
@@ -29,7 +30,7 @@ import zlib
 PREFIX_RE = re.compile(r'^(tc|pc|rc|tag)(-[a-z0-9]+)?\s*:')
 CASE_RE = re.compile(r'^tc(-([a-z0-9]+))?\s*:\s*(.+)$', re.IGNORECASE)
 META_RE = re.compile(r'^(pc|rc|tag)\s*:\s*(\S.*)$', re.IGNORECASE)
-STEP_RE = re.compile(r'^步骤([1-9][0-9]*)[：:]\s*(\S.*)$')
+ACTION_LINE_RE = re.compile(r'^([1-9][0-9]*)[.、]\s*(\S.*)$')
 PLACEHOLDER_RE = re.compile(r'^(同上|正常|正确|没问题|待确认|待补充|TODO|TBD)[。.!！]?$', re.IGNORECASE)
 
 
@@ -48,7 +49,8 @@ def load_outline(path):
             if indent % 2 != 0:
                 raise ValueError(f'第 {lineno} 行缩进不是 2 的倍数：{line[:40]}')
             depth = indent // 2
-            title = line.strip()
+            # Literal \n keeps a multi-line action block on one physical outline line.
+            title = line.strip().replace('\\n', '\n')
             node = {'title': title, 'children': []}
             if root is None:
                 if depth != 0:
@@ -91,13 +93,13 @@ def validate(root, strict=False):
     case_count = 0
     case_titles = set()
 
-    def walk(node, module_depth):
+    def walk(node, module_depth, parent_path=()):
         nonlocal module_count, case_count
         title = node['title']
         check_prefix(title)
         if node is root:
             for child in node['children']:
-                walk(child, 0)
+                walk(child, 0, (title,))
             return
         if is_case(title):
             match = CASE_RE.match(title.upper())
@@ -111,13 +113,13 @@ def validate(root, strict=False):
                     raise ValueError(f'用例必须位于模块下：{title[:40]}')
                 if not level:
                     raise ValueError(f'正式用例缺少优先级：{title[:40]}')
-                case_title = match.group(3).strip().casefold()
+                case_title = (parent_path, match.group(3).strip().casefold())
                 if case_title in case_titles:
                     raise ValueError(f'用例名称重复，请补充对象或条件：{title[:40]}')
                 case_titles.add(case_title)
             stats[level or 'none'] += 1
             case_count += 1
-            steps = 0
+            action_blocks = 0
             metadata = set()
             for child in node['children']:
                 child_low = child['title'].lower()
@@ -139,20 +141,28 @@ def validate(root, strict=False):
                             if '，' in meta.group(2) or any(not tag for tag in tags) or len(set(tags)) != len(tags):
                                 raise ValueError(f'标签须用半角逗号分隔且非空、不重复：{child["title"][:40]}')
                 else:
-                    steps += 1
+                    action_blocks += 1
                     if strict:
-                        step = STEP_RE.fullmatch(child['title'])
-                        if not step or int(step.group(1)) != steps:
-                            raise ValueError(f'步骤须从1连续编号且动作非空：{child["title"][:40]}')
+                        action_lines = child['title'].splitlines()
+                        if not action_lines:
+                            raise ValueError(f'操作步骤不能为空：{title[:40]}')
+                        for expected_number, action_line in enumerate(action_lines, 1):
+                            action = ACTION_LINE_RE.fullmatch(action_line.strip())
+                            if not action or int(action.group(1)) != expected_number:
+                                raise ValueError(f'操作步骤须在一个主题内从1连续编号且动作非空：{child["title"][:60]}')
                     if not child['children']:
-                        raise ValueError(f'用例「{title[:30]}」的步骤缺少预期结果：{child["title"][:30]}')
+                        raise ValueError(f'用例「{title[:30]}」的操作步骤缺少关键预期：{child["title"][:30]}')
+                    if strict and len(child['children']) != 1:
+                        raise ValueError(f'用例「{title[:30]}」的操作步骤下必须只有一个关键预期')
                     for exp in child['children']:
                         if exp['children']:
                             raise ValueError(f'预期结果下不允许再有子节点：{exp["title"][:30]}')
                         if strict and (not exp['title'].strip() or PLACEHOLDER_RE.fullmatch(exp['title'].strip())):
                             raise ValueError(f'预期为空或使用占位描述：{exp["title"][:40]}')
-            if steps == 0:
-                raise ValueError(f'用例「{title[:30]}」缺少步骤节点')
+            if action_blocks == 0:
+                raise ValueError(f'用例「{title[:30]}」缺少操作步骤主题')
+            if strict and action_blocks != 1:
+                raise ValueError(f'用例「{title[:30]}」必须且只能有一个操作步骤主题')
             if strict and metadata != {'pc', 'rc', 'tag'}:
                 raise ValueError(f'用例「{title[:30]}」缺少元数据：{", ".join(sorted({"pc", "rc", "tag"} - metadata))}')
             return
@@ -161,10 +171,26 @@ def validate(root, strict=False):
         module_count += 1
         if strict and not node['children']:
             raise ValueError(f'存在没有用例的空模块：{title[:40]}')
+        if strict:
+            sibling_modules = [c['title'] for c in node['children']
+                               if not is_case(c['title']) and not is_meta(c['title'])]
+            for combined in sibling_modules:
+                for separator in ('与', '和', '/'):
+                    parts = [part.strip() for part in combined.split(separator)]
+                    if len(parts) != 2 or not all(parts):
+                        continue
+                    matches = [any(other != combined and
+                                   (other == part or other.startswith(part) or part.startswith(other))
+                                   for other in sibling_modules)
+                               for part in parts]
+                    if all(matches):
+                        raise ValueError(
+                            f'同级模块分类范围重叠：已有「{parts[0]}」和「{parts[1]}」相关分支，'
+                            f'不能再使用「{combined}」')
         if module_depth >= 8:
             raise ValueError(f'模块层级超过 8 层：{title[:40]}')
         for child in node['children']:
-            walk(child, module_depth + 1)
+            walk(child, module_depth + 1, parent_path + (title,))
 
     walk(root, 0)
     if strict and case_count == 0:
@@ -233,7 +259,7 @@ def build(root, out_path):
 
 def main():
     parser = argparse.ArgumentParser(description='Build an XMind outline; no business or importer validation.')
-    parser.add_argument('--strict', action='store_true', help='Require delivery fields and numbered steps.')
+    parser.add_argument('--strict', action='store_true', help='Require delivery fields, one numbered action block, and one key expected result.')
     parser.add_argument('outline')
     parser.add_argument('output')
     args = parser.parse_args()
@@ -248,7 +274,7 @@ def main():
     print(f'  modules     : {module_count}')
     print(f'  cases       : {case_count} '
           f'(p0={stats["p0"]}, p1={stats["p1"]}, p2={stats["p2"]}, p3={stats["p3"]}, no-level={stats["none"]})')
-    print(f'  steps+exp   : parsed and validated')
+    print(f'  action+key  : single action block and key expected result validated')
     print(f'VALIDATION MODE: {"strict" if args.strict else "basic"}')
     print('VERIFY OK: ZIP entries and complete topic tree round-trip verified')
     print('NOT VERIFIED: business coverage, test execution, MeterSphere import compatibility')
